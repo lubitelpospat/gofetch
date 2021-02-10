@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -20,12 +21,19 @@ type BasePathsResponse struct {
 }
 
 func main() {
-	srr := os.Args[1]
-	directDownloadPaths := GetFtpLinks(srr)
+	srrPtr := flag.String("i", "", "SRA accession (Required)")
+	outDirPtr := flag.String("O", "", "Output directory")
+	flag.Parse()
+
+	if *srrPtr == "" {
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+	directDownloadPaths := GetFtpLinks(*srrPtr)
 	//fmt.Println(directDownloadPaths)
 	for _, fileName := range directDownloadPaths {
-		fmt.Println(fileName)
-		DownloadFtpFile(fileName)
+		log.Printf("Start download:%v\r\n", fileName)
+		DownloadFtpFile(fileName, *outDirPtr)
 
 	}
 }
@@ -49,19 +57,21 @@ func GetFtpLinks(srr string) []string {
 
 }
 
-func DownloadFtpFile(remoteFile string) {
+func DownloadFtpFile(remoteFile string, outPath string) {
 
 	startTime := time.Now()
 
 	localFileName := filepath.Base(remoteFile)
-	log.Printf("Start download:%v\r\n", remoteFile)
-	localFile, err := os.Create(localFileName)
+
+	localFile, err := os.Create(filepath.Join(outPath, localFileName))
+	if err != nil {
+		fmt.Println("Error creating local file. Check that output directory exists and all write permissions are satisfied. \nExiting.")
+	}
 	defer localFile.Close()
 
 	serverName := strings.Split(remoteFile, "/")[0]
 	fileName := strings.Join(strings.Split(remoteFile, "/")[1:], "/")
-	log.Printf("File name: %s\n", fileName)
-	log.Printf("Server name: %s\n", serverName)
+
 	conn, err := ftp.Dial(fmt.Sprintf("%s:21", serverName), ftp.DialWithTimeout(5*time.Second))
 	if err != nil {
 		log.Fatal(err)
@@ -69,6 +79,12 @@ func DownloadFtpFile(remoteFile string) {
 	if err = conn.Login("anonymous", "anonymous"); err != nil {
 		panic(err)
 	}
+	size, err := conn.FileSize(fileName)
+	if err != nil {
+		fmt.Println("Error estimating file size.\nExiting.")
+		os.Exit(1)
+	}
+	log.Printf("File size: %v bytes", size)
 	r, err := conn.Retr(fileName)
 	if err != nil {
 		panic(err)
@@ -80,5 +96,5 @@ func DownloadFtpFile(remoteFile string) {
 	}
 
 	timeElapsed := time.Since(startTime)
-	log.Println("Elapsed\t%v", timeElapsed)
+	log.Printf("Elapsed\t%v\n", timeElapsed)
 }
