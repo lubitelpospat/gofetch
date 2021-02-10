@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cheggaaa/pb/v3"
 	"github.com/jlaffaye/ftp"
 )
 
@@ -79,18 +80,22 @@ func DownloadFtpFile(remoteFile string, outPath string) {
 	if err = conn.Login("anonymous", "anonymous"); err != nil {
 		panic(err)
 	}
-	size, err := conn.FileSize(fileName)
+	limit, err := conn.FileSize(fileName)
 	if err != nil {
 		fmt.Println("Error estimating file size.\nExiting.")
 		os.Exit(1)
 	}
-	log.Printf("File size: %v bytes", size)
+	log.Printf("File size: %v bytes", limit)
 	r, err := conn.Retr(fileName)
 	if err != nil {
 		panic(err)
 	}
 	defer r.Close()
-	_, err = io.Copy(localFile, r)
+
+	bar := pb.Full.Start64(limit)
+	defer bar.Finish()
+	barReader := bar.NewProxyReader(r)
+	_, err = io.Copy(localFile, barReader)
 	if err != nil {
 		panic(err)
 	}
