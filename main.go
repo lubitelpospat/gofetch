@@ -15,7 +15,8 @@ import (
 	"time"
 
 	"github.com/jlaffaye/ftp"
-	"github.com/sethgrid/multibar"
+	"github.com/vbauerster/mpb"
+	"github.com/vbauerster/mpb/decor"
 )
 
 type BasePathsResponse struct {
@@ -25,9 +26,10 @@ type BasePathsResponse struct {
 
 type PassThru struct {
 	io.Reader
-	progressBar *multibar.ProgressFunc
-	Start       time.Time
-	total       int // Total # of bytes transferred
+	bar   *mpb.Bar
+	start time.Time
+	//progressBar *multibar.ProgressFunc
+	total int // Total # of bytes transferred
 
 }
 
@@ -37,14 +39,18 @@ type PassThru struct {
 func (pt *PassThru) Read(p []byte) (int, error) {
 	n, err := pt.Reader.Read(p)
 	pt.total += int(n)
-	(*pt.progressBar)(pt.total)
+	pt.bar.IncrBy(n)
+	pt.bar.DecoratorEwmaUpdate(time.Since(pt.start))
+	//(*pt.progressBar)(pt.total)
 	return n, err
 }
 
 func main() {
+
 	srrPtr := flag.String("i", "", "SRA accession or path to file with SRA accessions(requires -L flag)(Required)")
 	outDirPtr := flag.String("O", "", "Output directory")
-
+	numWorkersPtr := flag.Int("t", 5, "number of workers to use for downloading, default value is 5.")
+	numWorkers := *numWorkersPtr
 	listFlag := flag.Bool("L", false, "Input is a file with SRA accessions")
 	flag.Parse()
 
@@ -52,8 +58,10 @@ func main() {
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
+
 	var directDownloadPaths []string
 	if *listFlag == false {
+		log.Println("Getting information about file locations, please wait...")
 		directDownloadPaths = GetFtpLinks(*srrPtr)
 	} else {
 		file, err := os.Open(*srrPtr)
@@ -68,6 +76,7 @@ func main() {
 		for scanner.Scan() {
 			accessions = append(accessions, scanner.Text())
 		}
+		log.Println("Getting information about file locations, please wait...")
 		for _, accession := range accessions {
 			for _, tmp := range GetFtpLinks(accession) {
 				directDownloadPaths = append(directDownloadPaths, tmp)
@@ -76,18 +85,47 @@ func main() {
 		}
 
 	}
-	//fmt.Println(directDownloadPaths)
-	var wg sync.WaitGroup
-	numBars := len(directDownloadPaths)
-	progressBars, _ := multibar.New()
-	wg.Add(numBars)
-	for _, fileName := range directDownloadPaths {
 
-		go DownloadFtpFile(fileName, *outDirPtr, &wg, progressBars)
+	if len(directDownloadPaths) < numWorkers {
+		numWorkers = len(directDownloadPaths)
+	}
+
+	//fmt.Println(directDownloadPaths)
+	//wg := new(sync.WaitGroup)
+	doneWg := new(sync.WaitGroup)
+	p := mpb.New(mpb.WithWaitGroup(doneWg))
+	//var bars []*mpb.Bar
+	log.Printf("num workers: %d\n", numWorkers)
+	//wg.Add(numWorkers)
+	log.Printf("%d files are to be downloaded.\n", len(directDownloadPaths))
+	resultsChannel := make(chan int)
+	taskChannel := make(chan string)
+	for i := 0; i < numWorkers; i++ {
+		go DownloadWorker(*outDirPtr, p, &taskChannel, &resultsChannel)
+	}
+
+	go func() {
+		for _, fileName := range directDownloadPaths {
+			taskChannel <- fileName
+
+		}
+	}()
+
+	for i := 0; i < len(directDownloadPaths); i++ {
+		<-resultsChannel
+	}
+	go p.Wait()
+	close(taskChannel)
+	close(resultsChannel)
+
+}
+
+func DownloadWorker(outPath string, p *mpb.Progress, taskChannel *chan string, resultsChannel *chan int) {
+	for task := range *taskChannel {
+		DownloadFtpFile(task, outPath, p)
+		*resultsChannel <- -1
 
 	}
-	go progressBars.Listen()
-	wg.Wait()
 }
 
 func GetFtpLinks(srr string) []string {
@@ -111,10 +149,7 @@ func GetFtpLinks(srr string) []string {
 
 }
 
-func DownloadFtpFile(remoteFile string, outPath string, wg *sync.WaitGroup, progressBars *multibar.BarContainer) {
-	defer wg.Done()
-
-	startTime := time.Now()
+func DownloadFtpFile(remoteFile string, outPath string, p *mpb.Progress) {
 
 	localFileName := filepath.Base(remoteFile)
 
@@ -127,7 +162,7 @@ func DownloadFtpFile(remoteFile string, outPath string, wg *sync.WaitGroup, prog
 	serverName := strings.Split(remoteFile, "/")[0]
 	fileName := strings.Join(strings.Split(remoteFile, "/")[1:], "/")
 
-	conn, err := ftp.Dial(fmt.Sprintf("%s:21", serverName), ftp.DialWithTimeout(5*time.Second))
+	conn, err := ftp.Dial(fmt.Sprintf("%s:21", serverName), ftp.DialWithTimeout(10*time.Second))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -139,21 +174,30 @@ func DownloadFtpFile(remoteFile string, outPath string, wg *sync.WaitGroup, prog
 		fmt.Println("Error estimating file size.\nExiting.")
 		os.Exit(1)
 	}
-	name := fmt.Sprintf("%s:", filepath.Base(localFileName))
+	name := fmt.Sprintf("%s:", localFileName)
 
-	log.Printf("File size: %v bytes", limit)
+	//log.Printf("File size: %v bytes", limit)
 	r, err := conn.Retr(fileName)
 	if err != nil {
 		panic(err)
 	}
 	defer r.Close()
-	barProgress := progressBars.MakeBar(int(limit), name)
-	response := &PassThru{Reader: r, progressBar: &barProgress, Start: startTime}
+	//barProgress := progressBars.MakeBar(int(limit), name)
+	//response := &PassThru{Reader: r, progressBar: &barProgress}
+	newBar := p.AddBar(limit,
+		mpb.PrependDecorators(
+			decor.Name(name, decor.WC{W: len(name) + 1, C: decor.DidentRight}),
+			decor.CountersNoUnit("%d / %d", decor.WCSyncWidth),
+		),
+		mpb.AppendDecorators(decor.Percentage(decor.WC{W: 5})),
+	)
+	//*bars = append(*bars, newBar)
+	response := &PassThru{Reader: r, bar: newBar, start: time.Now()}
 	_, err = io.Copy(localFile, response)
 	if err != nil {
 		panic(err)
 	}
 
-	timeElapsed := time.Since(startTime)
-	log.Printf("Elapsed\t%v\n", timeElapsed)
+	//timeElapsed := time.Since(startTime)
+	//log.Printf("Elapsed\t%v\n", timeElapsed)
 }

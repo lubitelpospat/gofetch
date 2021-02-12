@@ -1,3 +1,12 @@
 # gofetch
 
-Gofetch is a lightweight and easy-to-use analogue of prefetch from sra-toolkit. Its main feature is ftp support which makes it easier to use in pipelines than prefetch. Thanks to that, it works faster than the default https in prefetch (however, it is slightly slower than ascp). Also, I added some features such as reading a list of SRA accessions and specifying output directory on-the-go. Also, it reports file size before it is downloaded which I personally find useful when tracking the download progress. 
+Gofetch is a lightweight and easy-to-use analogue of prefetch+fastq-dump from sra-toolkit.
+
+## Dependencies
+`github.com/jlaffaye/ftp`
+`github.com/vbauerster/mpb/v6`
+
+## Usage
+
+
+## Known Issues
