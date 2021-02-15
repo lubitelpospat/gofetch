@@ -48,12 +48,13 @@ func (pt *PassThru) Read(p []byte) (int, error) {
 func main() {
 
 	srrPtr := flag.String("i", "", "SRA accession or path to file with SRA accessions(requires -L flag)(Required)")
-	outDirPtr := flag.String("O", "", "Output directory")
-	numWorkersPtr := flag.Int("t", 5, "number of workers to use for downloading, default value is 5.")
-	numWorkers := *numWorkersPtr
+	outDirPtr := flag.String("O", "", "Output directory, default \"\"")
+	numWorkersPtr := flag.Int("t", 5, "Number of workers to use for downloading, default 5.")
+	//timeoutPtr := flag.Int("T", 10, "Timeout for FTP connections in seconds, default 10")
+
 	listFlag := flag.Bool("L", false, "Input is a file with SRA accessions")
 	flag.Parse()
-
+	numWorkers := *numWorkersPtr
 	if *srrPtr == "" {
 		flag.PrintDefaults()
 		os.Exit(1)
@@ -114,7 +115,7 @@ func main() {
 	for i := 0; i < len(directDownloadPaths); i++ {
 		<-resultsChannel
 	}
-	go p.Wait()
+	p.Wait()
 	close(taskChannel)
 	close(resultsChannel)
 
